@@ -3,7 +3,6 @@ esphome:
    priority: 1000
    then:
     - delay: 5s
-    - lambda: 'id(version).publish_state("1");'
     - script.execute: discover_unit 
 
 esp32:
@@ -174,6 +173,7 @@ script:
   # ── Walk candidates 0-4, stop at the first genuine reply ──
   - id: discover_unit
     then:
+      - lambda: 'id(version).publish_state("1");'
       - lambda: 'ESP_LOGW("d1d2", "Starting sweep");'
       - lambda: 'id(unit_address) = -1;'
  
