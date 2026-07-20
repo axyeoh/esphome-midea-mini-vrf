@@ -1,3 +1,10 @@
+esphome:
+  on_boot:
+   priority: 1000
+   then:
+    - delay: 5s
+    - lambda: 'id(version).publish_state("1");'
+    - script.execute: discover_unit 
 
 esp32:
   board: esp32dev  # adjust to your variant
@@ -39,6 +46,10 @@ text_sensor:
   - platform: template
     name: "D1D2 Unit Mode"
     id: mode_sensor
+  
+  - platform: template
+    name: "Version"
+    id: version
  
 sensor:
   - platform: template
