@@ -173,7 +173,7 @@ script:
   # ── Walk candidates 0-4, stop at the first genuine reply ──
   - id: discover_unit
     then:
-      - lambda: 'ESP_LOGW("Publishing version");'
+      - lambda: 'ESP_LOGW("d1d2","Publishing version");'
       - lambda: 'id(version).publish_state("1");'
       - lambda: 'ESP_LOGW("d1d2", "Starting sweep");'
       - lambda: 'id(unit_address) = -1;'
