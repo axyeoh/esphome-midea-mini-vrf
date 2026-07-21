@@ -7,48 +7,62 @@ binary_sensor:
       int addr = id(g_slot_address)[${unit_id}];
       return addr >= 0 && id(g_poll_ok)[addr];
 
-climate:
+text_sensor:
   - platform: template
-    name: "${unit_name}"
-    id: climate_${unit_id}
+    name: "${unit_name} Mode"
+    id: mode_sensor_${unit_id}
+
+sensor:
+  - platform: template
+    name: "${unit_name} Temperature"
+    id: temp_sensor_${unit_id}
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+
+select:
+  - platform: template
+    name: "${unit_name} Mode Control"
+    id: mode_select_${unit_id}
     optimistic: false
-    visual:
-      min_temperature: 17
-      max_temperature: 30
-      temperature_step: 0.5
-
-    modes:
-      - "OFF"
-      - COOL
-      - HEAT
-      - DRY
-      - FAN_ONLY
-
-    mode_action:
+    options: ["off", "cool", "heat", "dry", "fan_only"]
+    set_action:
       - lambda: |-
           int addr = id(g_slot_address)[${unit_id}];
           if (addr < 0) { ESP_LOGW("d1d2", "${unit_name}: slot not assigned, ignoring mode set"); return; }
+      - if:
+          condition:
+            lambda: 'return id(g_slot_address)[${unit_id}] >= 0;'
+          then:
+            - script.execute:
+                id: send_mode_generic
+                unit_id: !lambda 'return id(g_slot_address)[${unit_id}];'
+                requested_mode: !lambda 'return x;'
+            - script.wait: send_mode_generic
+            - script.execute: poll_${unit_id}
 
-          std::string requested_mode;
-          switch (x) {
-            case climate::CLIMATE_MODE_OFF:      requested_mode = "off";      break;
-            case climate::CLIMATE_MODE_COOL:     requested_mode = "cool";     break;
-            case climate::CLIMATE_MODE_HEAT:     requested_mode = "heat";     break;
-            case climate::CLIMATE_MODE_DRY:      requested_mode = "dry";      break;
-            case climate::CLIMATE_MODE_FAN_ONLY: requested_mode = "fan_only"; break;
-            default:                             requested_mode = "cool";    break;
-          }
-          id(send_mode_generic)->execute(addr, requested_mode);
-      - delay: 700ms
-      - script.execute: poll_${unit_id}
-
-    target_temperature_action:
+number:
+  - platform: template
+    name: "${unit_name} Temperature Control"
+    id: temp_number_${unit_id}
+    optimistic: false
+    min_value: 17
+    max_value: 30
+    step: 0.5
+    unit_of_measurement: "°C"
+    set_action:
       - lambda: |-
           int addr = id(g_slot_address)[${unit_id}];
           if (addr < 0) { ESP_LOGW("d1d2", "${unit_name}: slot not assigned, ignoring temp set"); return; }
-          id(send_temp_generic)->execute(addr, x);
-      - delay: 700ms
-      - script.execute: poll_${unit_id}
+      - if:
+          condition:
+            lambda: 'return id(g_slot_address)[${unit_id}] >= 0;'
+          then:
+            - script.execute:
+                id: send_temp_generic
+                unit_id: !lambda 'return id(g_slot_address)[${unit_id}];'
+                requested_temp: !lambda 'return x;'
+            - script.wait: send_temp_generic
+            - script.execute: poll_${unit_id}
 
 button:
   - platform: template
@@ -69,22 +83,11 @@ script:
             - script.wait: poll_unit_generic
             - lambda: |-
                 int addr = id(g_slot_address)[${unit_id}];
-                bool ok = id(g_poll_ok)[addr];
-                id(present_${unit_id}).publish_state(ok);
-                if (!ok) return;
-
-                auto call = id(climate_${unit_id}).make_call();
-
-                std::string mode = id(g_reported_mode)[addr];
-                if      (mode == "off")      call.set_mode(climate::CLIMATE_MODE_OFF);
-                else if (mode == "cool")     call.set_mode(climate::CLIMATE_MODE_COOL);
-                else if (mode == "heat")     call.set_mode(climate::CLIMATE_MODE_HEAT);
-                else if (mode == "dry")      call.set_mode(climate::CLIMATE_MODE_DRY);
-                else if (mode == "fan_only") call.set_mode(climate::CLIMATE_MODE_FAN_ONLY);
-
-                id(climate_${unit_id}).current_temperature = id(g_current_temp)[addr];
-                call.set_target_temperature(id(g_current_temp)[addr]);
-                call.perform();
+                id(mode_sensor_${unit_id}).publish_state(id(g_reported_mode)[addr]);
+                id(temp_sensor_${unit_id}).publish_state(id(g_current_temp)[addr]);
+                id(mode_select_${unit_id}).publish_state(id(g_reported_mode)[addr]);
+                id(temp_number_${unit_id}).publish_state(id(g_current_temp)[addr]);
+                id(present_${unit_id}).publish_state(id(g_poll_ok)[addr]);
           else:
             - lambda: 'id(present_${unit_id}).publish_state(false);'
 
