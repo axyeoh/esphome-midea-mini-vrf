@@ -1,0 +1,94 @@
+binary_sensor:
+  - platform: template
+    name: "${unit_name} Present"
+    id: present_${unit_id}
+    device_class: connectivity
+    lambda: |-
+      int addr = id(g_slot_address)[${unit_id}];
+      return addr >= 0 && id(g_poll_ok)[addr];
+
+climate:
+  - platform: template
+    name: "${unit_name}"
+    id: climate_${unit_id}
+    optimistic: false
+    visual:
+      min_temperature: 17
+      max_temperature: 30
+      temperature_step: 0.5
+
+    modes:
+      - "OFF"
+      - COOL
+      - HEAT
+      - DRY
+      - FAN_ONLY
+
+    mode_action:
+      - lambda: |-
+          int addr = id(g_slot_address)[${unit_id}];
+          if (addr < 0) { ESP_LOGW("d1d2", "${unit_name}: slot not assigned, ignoring mode set"); return; }
+
+          std::string requested_mode;
+          switch (x) {
+            case climate::CLIMATE_MODE_OFF:      requested_mode = "off";      break;
+            case climate::CLIMATE_MODE_COOL:     requested_mode = "cool";     break;
+            case climate::CLIMATE_MODE_HEAT:     requested_mode = "heat";     break;
+            case climate::CLIMATE_MODE_DRY:      requested_mode = "dry";      break;
+            case climate::CLIMATE_MODE_FAN_ONLY: requested_mode = "fan_only"; break;
+            default:                             requested_mode = "cool";    break;
+          }
+          id(send_mode_generic)->execute(addr, requested_mode);
+      - delay: 700ms
+      - script.execute: poll_${unit_id}
+
+    target_temperature_action:
+      - lambda: |-
+          int addr = id(g_slot_address)[${unit_id}];
+          if (addr < 0) { ESP_LOGW("d1d2", "${unit_name}: slot not assigned, ignoring temp set"); return; }
+          id(send_temp_generic)->execute(addr, x);
+      - delay: 700ms
+      - script.execute: poll_${unit_id}
+
+button:
+  - platform: template
+    name: "${unit_name} Poll Now"
+    on_press:
+      - script.execute: poll_${unit_id}
+
+script:
+[O  - id: poll_${unit_id}
+    then:
+      - if:
+          condition:
+            lambda: 'return id(g_slot_address)[${unit_id}] >= 0;'
+          then:
+            - script.execute:
+                id: poll_unit_generic
+                unit_id: !lambda 'return id(g_slot_address)[${unit_id}];'
+            - script.wait: poll_unit_generic
+            - lambda: |-
+                int addr = id(g_slot_address)[${unit_id}];
+                bool ok = id(g_poll_ok)[addr];
+                id(present_${unit_id}).publish_state(ok);
+                if (!ok) return;
+
+                auto call = id(climate_${unit_id}).make_call();
+
+                std::string mode = id(g_reported_mode)[addr];
+                if      (mode == "off")      call.set_mode(climate::CLIMATE_MODE_OFF);
+                else if (mode == "cool")     call.set_mode(climate::CLIMATE_MODE_COOL);
+                else if (mode == "heat")     call.set_mode(climate::CLIMATE_MODE_HEAT);
+                else if (mode == "dry")      call.set_mode(climate::CLIMATE_MODE_DRY);
+                else if (mode == "fan_only") call.set_mode(climate::CLIMATE_MODE_FAN_ONLY);
+
+                id(climate_${unit_id}).current_temperature = id(g_current_temp)[addr];
+                call.set_target_temperature(id(g_current_temp)[addr]);
+                call.perform();
+          else:
+            - lambda: 'id(present_${unit_id}).publish_state(false);'
+
+interval:
+  - interval: 15s
+    then:
+      - script.execute: poll_${unit_id}
