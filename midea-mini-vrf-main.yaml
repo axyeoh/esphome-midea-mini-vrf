@@ -103,7 +103,7 @@ script:
               ESP_LOGI("d1d2", "All slots filled, stopping sweep");
               break;
             }
-[O
+
             uint8_t dummy;
             while (id(d1d2_bus)->available()) id(d1d2_bus)->read_byte(&dummy);
 
