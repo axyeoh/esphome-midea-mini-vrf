@@ -57,7 +57,7 @@ button:
       - script.execute: poll_${unit_id}
 
 script:
-[O  - id: poll_${unit_id}
+  - id: poll_${unit_id}
     then:
       - if:
           condition:
