@@ -37,4 +37,283 @@ button:
     on_press:
       - script.execute: discover_and_assign
 
-# ── State
+# ── State storage, indexed by ACTUAL bus address (0-63) ──
+globals:
+  - id: g_current_temp
+    type: std::array<float, 64>
+    initial_value: '{0}'
+  - id: g_reported_mode
+    type: std::array<std::string, 64>
+    initial_value: '{""}'
+  - id: g_last_mode_nibble
+    type: std::array<uint8_t, 64>
+    initial_value: '{0x02}'
+  - id: g_is_powered_on
+    type: std::array<bool, 64>
+    initial_value: '{false}'
+  - id: g_poll_ok
+    type: std::array<bool, 64>
+    initial_value: '{false}'
+
+  # slot -> real bus address, -1 = unassigned. Persisted across reboots.
+  - id: g_slot_address
+    type: std::array<int, 8>
+    restore_value: true
+    initial_value: '{-1,-1,-1,-1,-1,-1,-1,-1}'
+
+script:
+  # ── Sweep the bus, fill any empty slots with newly-found addresses. ──
+  - id: discover_and_assign
+    then:
+      - lambda: |-
+          const int NUM_SLOTS = 8;
+
+          auto crc16_modbus = [](std::vector<uint8_t> data) -> uint16_t {
+            uint16_t crc = 0xFFFF;
+            for (uint8_t b : data) {
+              crc ^= b;
+              for (int i = 0; i < 8; i++) {
+                if (crc & 1) crc = (crc >> 1) ^ 0xA001;
+                else crc >>= 1;
+              }
+            }
+            return crc;
+          };
+
+          auto is_already_assigned = [&](int addr) -> bool {
+            for (int s = 0; s < NUM_SLOTS; s++)
+              if (id(g_slot_address)[s] == addr) return true;
+            return false;
+          };
+
+          auto first_free_slot = [&]() -> int {
+            for (int s = 0; s < NUM_SLOTS; s++)
+              if (id(g_slot_address)[s] == -1) return s;
+            return -1;
+          };
+
+          ESP_LOGI("d1d2", "Starting discovery sweep");
+
+          for (int addr = 0; addr < 64; addr++) {
+            if (is_already_assigned(addr)) continue;
+
+            int slot = first_free_slot();
+            if (slot == -1) {
+              ESP_LOGI("d1d2", "All slots filled, stopping sweep");
+              break;
+            }
+
+            uint8_t dummy;
+            while (id(d1d2_bus)->available()) id(d1d2_bus)->read_byte(&dummy);
+
+            std::vector<uint8_t> body = { 0x23, (uint8_t) addr, 0x00, 0x64, 0x00, 0x01, 0x65 };
+            uint16_t crc = crc16_modbus(body);
+            std::vector<uint8_t> frame = {0xAA};
+            for (auto b : body) frame.push_back(b);
+            frame.push_back(crc & 0xFF);
+            frame.push_back((crc >> 8) & 0xFF);
+            frame.push_back(0x55);
+            frame.push_back(0xFE);
+            id(d1d2_bus)->write_array(frame.data(), frame.size());
+
+            delay(500);
+
+            std::vector<uint8_t> rx;
+            uint8_t b;
+            while (id(d1d2_bus)->available()) {
+              id(d1d2_bus)->read_byte(&b);
+              rx.push_back(b);
+            }
+
+            if (rx.size() >= 18 && rx[0] == 0xAA && rx[2] == 0x64 && rx[4] == addr) {
+              id(g_slot_address)[slot] = addr;
+              ESP_LOGI("d1d2", "Assigned bus address %d -> slot %d", addr, slot);
+            }
+          }
+
+          int assigned = 0;
+          for (int s = 0; s < NUM_SLOTS; s++) if (id(g_slot_address)[s] >= 0) assigned++;
+          ESP_LOGI("d1d2", "Discovery complete: %d slot(s) assigned", assigned);
+      - script.execute: poll_all_assigned
+
+  # ── Poll every currently-assigned slot once (used after discovery). ──
+  - id: poll_all_assigned
+    then:
+      - lambda: |-
+          for (int s = 0; s < 8; s++) {
+            int addr = id(g_slot_address)[s];
+            if (addr >= 0) id(poll_unit_generic)->execute(addr);
+          }
+
+  # ── Poll one unit by real bus address. ──
+  - id: poll_unit_generic
+    mode: queued
+    parameters:
+      unit_id: int
+    then:
+      - lambda: |-
+          if (unit_id < 0 || unit_id >= 64) { ESP_LOGE("d1d2", "poll: addr %d out of range", unit_id); return; }
+          uint8_t dest = (uint8_t) unit_id;
+          uint8_t dummy;
+          while (id(d1d2_bus)->available()) id(d1d2_bus)->read_byte(&dummy);
+
+          auto crc16_modbus = [](std::vector<uint8_t> data) -> uint16_t {
+            uint16_t crc = 0xFFFF;
+            for (uint8_t b : data) {
+              crc ^= b;
+              for (int i = 0; i < 8; i++) {
+                if (crc & 1) crc = (crc >> 1) ^ 0xA001;
+                else crc >>= 1;
+              }
+            }
+            return crc;
+          };
+
+          std::vector<uint8_t> body = { 0x23, dest, 0x00, 0x64, 0x00, 0x01, 0x65 };
+          uint16_t crc = crc16_modbus(body);
+
+          std::vector<uint8_t> frame;
+          frame.push_back(0xAA);
+          for (auto b : body) frame.push_back(b);
+          frame.push_back(crc & 0xFF);
+          frame.push_back((crc >> 8) & 0xFF);
+          frame.push_back(0x55);
+          frame.push_back(0xFE);
+
+          id(d1d2_bus)->write_array(frame.data(), frame.size());
+      - delay: 500ms
+      - lambda: |-
+          if (unit_id < 0 || unit_id >= 64) return;
+          uint8_t dest = (uint8_t) unit_id;
+
+          std::vector<uint8_t> rx;
+          uint8_t b;
+          while (id(d1d2_bus)->available()) {
+            id(d1d2_bus)->read_byte(&b);
+            rx.push_back(b);
+          }
+
+          if (rx.size() < 18 || rx[0] != 0xAA) {
+            ESP_LOGW("d1d2", "Unit %d poll: no valid reply (%d bytes)", dest, (int) rx.size());
+            id(g_poll_ok)[dest] = false;
+            return;
+          }
+
+          uint8_t pwrMode = rx[8];
+          bool on = (pwrMode & 0xF0) == 0x40;
+          uint8_t modeNibble = pwrMode & 0x0F;
+
+          std::string modeStr;
+          switch (modeNibble) {
+            case 0x01: modeStr = "fan_only"; break;
+            case 0x02: modeStr = "cool";     break;
+            case 0x03: modeStr = "heat";     break;
+            case 0x06: modeStr = "dry";      break;
+            default:   modeStr = "unknown";  break;
+          }
+
+          id(g_is_powered_on)[dest] = on;
+          if (on) id(g_last_mode_nibble)[dest] = modeNibble;
+
+          id(g_current_temp)[dest] = 24.0f + ((int) rx[10] - 0x80) / 2.0f;
+          id(g_reported_mode)[dest] = on ? modeStr : "off";
+          id(g_poll_ok)[dest] = true;
+
+          ESP_LOGI("d1d2", "Unit %d: pwr=%s mode=%s temp=%.1f",
+                   dest, on ? "on" : "off", modeStr.c_str(), id(g_current_temp)[dest]);
+
+  # ── Send a mode change by real bus address. ──
+  - id: send_mode_generic
+    mode: queued
+    parameters:
+      unit_id: int
+      requested_mode: string
+    then:
+      - lambda: |-
+          if (unit_id < 0 || unit_id >= 64) { ESP_LOGE("d1d2", "send_mode: addr %d out of range", unit_id); return; }
+          uint8_t dest = (uint8_t) unit_id;
+          uint8_t pwrNibble, modeNibble;
+
+          if (requested_mode == "off") {
+            pwrNibble  = 0x00;
+            modeNibble = id(g_last_mode_nibble)[dest];
+          } else {
+            pwrNibble  = 0x40;
+            if      (requested_mode == "fan_only") modeNibble = 0x01;
+            else if (requested_mode == "cool")      modeNibble = 0x02;
+            else if (requested_mode == "heat")      modeNibble = 0x03;
+            else if (requested_mode == "dry")       modeNibble = 0x06;
+            else                                    modeNibble = 0x02;
+            id(g_last_mode_nibble)[dest] = modeNibble;
+          }
+
+          auto crc16_modbus = [](std::vector<uint8_t> data) -> uint16_t {
+            uint16_t crc = 0xFFFF;
+            for (uint8_t b : data) {
+              crc ^= b;
+              for (int i = 0; i < 8; i++) {
+                if (crc & 1) crc = (crc >> 1) ^ 0xA001;
+                else crc >>= 1;
+              }
+            }
+            return crc;
+          };
+
+          uint8_t combined = pwrNibble | modeNibble;
+          std::vector<uint8_t> body = { 0x23, dest, 0x00, 0x64, 0x00, 0x03, 0x01, 0x00, combined };
+          uint16_t crc = crc16_modbus(body);
+
+          std::vector<uint8_t> frame;
+          frame.push_back(0xAA);
+          for (auto bb : body) frame.push_back(bb);
+          frame.push_back(crc & 0xFF);
+          frame.push_back((crc >> 8) & 0xFF);
+          frame.push_back(0x55);
+          frame.push_back(0xFE);
+
+          ESP_LOGI("d1d2", "Unit %d: sending mode='%s' (0x%02X)", dest, requested_mode.c_str(), combined);
+          id(d1d2_bus)->write_array(frame.data(), frame.size());
+      - delay: 600ms
+
+  # ── Send a temperature setpoint by real bus address. ──
+  - id: send_temp_generic
+    mode: queued
+    parameters:
+      unit_id: int
+      requested_temp: float
+    then:
+      - lambda: |-
+          if (unit_id < 0 || unit_id >= 64) { ESP_LOGE("d1d2", "send_temp: addr %d out of range", unit_id); return; }
+          uint8_t dest = (uint8_t) unit_id;
+          float c = requested_temp;
+          if (c < 17.0f) c = 17.0f;
+          if (c > 30.0f) c = 30.0f;
+          uint8_t tb = (uint8_t)((c - 24.0f) * 2.0f + 128.0f);
+
+          auto crc16_modbus = [](std::vector<uint8_t> data) -> uint16_t {
+            uint16_t crc = 0xFFFF;
+            for (uint8_t b : data) {
+              crc ^= b;
+              for (int i = 0; i < 8; i++) {
+                if (crc & 1) crc = (crc >> 1) ^ 0xA001;
+                else crc >>= 1;
+              }
+            }
+            return crc;
+          };
+
+          std::vector<uint8_t> body = { 0x23, dest, 0x00, 0x64, 0x00, 0x07,
+                                         0x01, 0x03, tb, 0x04, tb, 0x02, tb };
+          uint16_t crc = crc16_modbus(body);
+
+          std::vector<uint8_t> frame;
+          frame.push_back(0xAA);
+          for (auto bb : body) frame.push_back(bb);
+          frame.push_back(crc & 0xFF);
+          frame.push_back((crc >> 8) & 0xFF);
+          frame.push_back(0x55);
+          frame.push_back(0xFE);
+
+          ESP_LOGI("d1d2", "Unit %d: sending temp=%.1f (0x%02X)", dest, c, tb);
+          id(d1d2_bus)->write_array(frame.data(), frame.size());
+      - delay: 600ms
