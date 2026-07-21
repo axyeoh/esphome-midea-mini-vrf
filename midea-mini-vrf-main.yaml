@@ -54,6 +54,9 @@ globals:
   - id: g_poll_ok
     type: std::array<bool, 64>
     initial_value: '{false}'
+  - id: g_scan_addr
+    type: int
+    initial_value: '0'
 
   # slot -> real bus address, -1 = unassigned. Persisted across reboots.
   - id: g_slot_address
@@ -63,10 +66,32 @@ globals:
 
 script:
   # ── Sweep the bus, fill any empty slots with newly-found addresses. ──
-  - id: discover_and_assign
+    - id: discover_and_assign
+    then:
+      - lambda: 'id(g_scan_addr) = 0;'
+      - while:
+          condition:
+            lambda: 'return id(g_scan_addr) < 64;'
+          then:
+            - script.execute: probe_one_addr
+            - script.wait: probe_one_addr
+      - script.execute: poll_all_assigned
+
+  - id: probe_one_addr
     then:
       - lambda: |-
-          const int NUM_SLOTS = 8;
+          int addr = id(g_scan_addr);
+
+          bool already = false;
+          for (int s = 0; s < 8; s++) if (id(g_slot_address)[s] == addr) { already = true; break; }
+          if (already) { id(g_scan_addr) = addr + 1; return; }
+
+          int slot = -1;
+          for (int s = 0; s < 8; s++) if (id(g_slot_address)[s] == -1) { slot = s; break; }
+          if (slot == -1) { id(g_scan_addr) = 64; return; }  // all slots full, end scan
+
+          uint8_t dummy;
+          while (id(d1d2_bus)->available()) id(d1d2_bus)->read_byte(&dummy);
 
           auto crc16_modbus = [](std::vector<uint8_t> data) -> uint16_t {
             uint16_t crc = 0xFFFF;
@@ -80,61 +105,35 @@ script:
             return crc;
           };
 
-          auto is_already_assigned = [&](int addr) -> bool {
-            for (int s = 0; s < NUM_SLOTS; s++)
-              if (id(g_slot_address)[s] == addr) return true;
-            return false;
-          };
-
-          auto first_free_slot = [&]() -> int {
-            for (int s = 0; s < NUM_SLOTS; s++)
-              if (id(g_slot_address)[s] == -1) return s;
-            return -1;
-          };
-
-          ESP_LOGI("d1d2", "Starting discovery sweep");
-
-          for (int addr = 0; addr < 64; addr++) {
-            if (is_already_assigned(addr)) continue;
-
-            int slot = first_free_slot();
-            if (slot == -1) {
-              ESP_LOGI("d1d2", "All slots filled, stopping sweep");
-              break;
-            }
-
-            uint8_t dummy;
-            while (id(d1d2_bus)->available()) id(d1d2_bus)->read_byte(&dummy);
-
-            std::vector<uint8_t> body = { 0x23, (uint8_t) addr, 0x00, 0x64, 0x00, 0x01, 0x65 };
-            uint16_t crc = crc16_modbus(body);
-            std::vector<uint8_t> frame = {0xAA};
-            for (auto b : body) frame.push_back(b);
-            frame.push_back(crc & 0xFF);
-            frame.push_back((crc >> 8) & 0xFF);
-            frame.push_back(0x55);
-            frame.push_back(0xFE);
-            id(d1d2_bus)->write_array(frame.data(), frame.size());
-
-            delay(500);
-
-            std::vector<uint8_t> rx;
-            uint8_t b;
-            while (id(d1d2_bus)->available()) {
-              id(d1d2_bus)->read_byte(&b);
-              rx.push_back(b);
-            }
-
-            if (rx.size() >= 18 && rx[0] == 0xAA && rx[2] == 0x64 && rx[4] == addr) {
-              id(g_slot_address)[slot] = addr;
-              ESP_LOGI("d1d2", "Assigned bus address %d -> slot %d", addr, slot);
-            }
+          std::vector<uint8_t> body = { 0x23, (uint8_t) addr, 0x00, 0x64, 0x00, 0x01, 0x65 };
+          uint16_t crc = crc16_modbus(body);
+          std::vector<uint8_t> frame = {0xAA};
+          for (auto b : body) frame.push_back(b);
+          frame.push_back(crc & 0xFF);
+          frame.push_back((crc >> 8) & 0xFF);
+          frame.push_back(0x55);
+          frame.push_back(0xFE);
+          id(d1d2_bus)->write_array(frame.data(), frame.size());
+      - delay: 500ms
+      - lambda: |-
+          int addr = id(g_scan_addr);
+          std::vector<uint8_t> rx;
+          uint8_t b;
+          while (id(d1d2_bus)->available()) {
+            id(d1d2_bus)->read_byte(&b);
+            rx.push_back(b);
           }
 
-          int assigned = 0;
-          for (int s = 0; s < NUM_SLOTS; s++) if (id(g_slot_address)[s] >= 0) assigned++;
-          ESP_LOGI("d1d2", "Discovery complete: %d slot(s) assigned", assigned);
-      - script.execute: poll_all_assigned
+          if (rx.size() >= 18 && rx[0] == 0xAA && rx[2] == 0x64 && rx[4] == addr) {
+            for (int s = 0; s < 8; s++) {
+              if (id(g_slot_address)[s] == -1) {
+                id(g_slot_address)[s] = addr;
+                ESP_LOGI("d1d2", "Assigned bus address %d -> slot %d", addr, s);
+                break;
+              }
+            }
+          }
+          id(g_scan_addr) = addr + 1;
 
   # ── Poll every currently-assigned slot once (used after discovery). ──
   - id: poll_all_assigned
