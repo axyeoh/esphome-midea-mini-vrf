@@ -28,6 +28,8 @@ button:
       - script.execute: discover_and_assign
 
 esphome:
+  includes:
+    - <array>
   on_boot:
     priority: 900
     then:
@@ -39,26 +41,26 @@ esphome:
 # ── Slot storage, indexed by SLOT (one per included unit file, i.e. unit_id) ──
 globals:
   - id: g_current_temp
-    type: float[64]
+    type: std::array<float, 64>
     initial_value: '{0}'
   - id: g_reported_mode
-    type: std::string[64]
+    type: std::array<std::string, 64>
     initial_value: '{}'
   - id: g_last_mode_nibble
-    type: uint8_t[64]
+    type: std::array<uint8_t, 64>
     initial_value: '{0x02}'
   - id: g_is_powered_on
-    type: bool[64]
+    type: std::array<bool, 64>
     initial_value: '{false}'
   - id: g_poll_ok
-    type: bool[64]
+    type: std::array<bool, 64>
     initial_value: '{false}'
 
-  # slot -> real bus address, -1 = unassigned. Persisted across reboots.
   - id: g_slot_address
-    type: int[8]
+    type: std::array<int, 8>
     restore_value: true
     initial_value: '{-1,-1,-1,-1,-1,-1,-1,-1}'
+
 
 script:
   # ── Sweep the bus, fill any empty slots with newly-found addresses. ──
