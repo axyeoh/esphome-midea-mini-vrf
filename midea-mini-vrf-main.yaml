@@ -66,7 +66,7 @@ globals:
 
 script:
   # ── Sweep the bus, fill any empty slots with newly-found addresses. ──
-    - id: discover_and_assign
+  - id: discover_and_assign
     then:
       - lambda: 'id(g_scan_addr) = 0;'
       - while:
