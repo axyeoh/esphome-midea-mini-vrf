@@ -19,6 +19,9 @@ text_sensor:
   - platform: template
     name: "${unit_name} Mode"
     id: mode_sensor_${unit_slot}
+  - platform: template
+    name: "${unit_name} Bus ID"
+    id: unit_id_${unit_slot}
 
 
 sensor:
@@ -50,11 +53,7 @@ select:
             - script.execute: poll_${unit_slot}
 
 number:
-  - platform: template
-    name: "${unit_name} Bus ID"
-    id: unit_id_${unit_slot}
-    min_value: -1
-    max_value: 64
+
   - platform: template
     name: "${unit_name} Temperature Control"
     id: temp_number_${unit_slot}
@@ -102,7 +101,7 @@ script:
                 id(mode_select_${unit_slot}).publish_state(id(g_reported_mode)[addr]);
                 id(temp_number_${unit_slot}).publish_state(id(g_current_temp)[addr]);
                 id(present_${unit_slot}).publish_state(id(g_poll_ok)[addr]);   
-                id(unit_id_${unit_slot}).publish_state(addr);
+                id(unit_id_${unit_slot}).publish_state(std::to_string(addr));
 
           else:
             - lambda: 'id(present_${unit_slot}).publish_state(false);'
