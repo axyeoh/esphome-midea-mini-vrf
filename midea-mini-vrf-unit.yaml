@@ -100,7 +100,8 @@ script:
                 id(temp_sensor_${unit_slot}).publish_state(id(g_current_temp)[addr]);
                 id(mode_select_${unit_slot}).publish_state(id(g_reported_mode)[addr]);
                 id(temp_number_${unit_slot}).publish_state(id(g_current_temp)[addr]);
-                id(present_${unit_slot}).publish_state(id(g_poll_ok)[addr]);
+                id(present_${unit_slot}).publish_state(id(g_poll_ok)[addr]);   
+                # yeah
                 id(unit_id_${unit_slot}).publish_state(id(g_slot_address)[${unit_slot}]);
 
           else:
