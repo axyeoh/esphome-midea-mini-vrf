@@ -53,6 +53,8 @@ number:
   - platform: template
     name: "${unit_name} Bus ID"
     id: unit_id_${unit_slot}
+    min_value: -1
+    max_value: 64
   - platform: template
     name: "${unit_name} Temperature Control"
     id: temp_number_${unit_slot}
