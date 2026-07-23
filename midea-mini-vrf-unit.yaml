@@ -100,7 +100,7 @@ script:
                 id(mode_select_${unit_slot}).publish_state(id(g_reported_mode)[addr]);
                 id(temp_number_${unit_slot}).publish_state(id(g_current_temp)[addr]);
                 id(present_${unit_slot}).publish_state(id(g_poll_ok)[addr]);
-		id(unit_id_${unit_slot}).publish_state(id(g_slot_address)[${unit_slot}]);
+                id(unit_id_${unit_slot}).publish_state(id(g_slot_address)[${unit_slot}]);
 
           else:
             - lambda: 'id(present_${unit_slot}).publish_state(false);'
