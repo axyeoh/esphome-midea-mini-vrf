@@ -19,8 +19,6 @@ text_sensor:
   - platform: template
     name: "${unit_name} Mode"
     id: mode_sensor_${unit_slot}
-
-text_sensor:
   - platform: template
     name: "${unit_name} Bus ID"
     id: unit_id_${unit_slot}
