@@ -2,6 +2,7 @@
 
 # unit_slot: the index number you are assigning to this unit, starting at 0. Not the same as the Unit ID Midea assigns.
 # unit_name: will be used as a prefix for all the sensors etc.
+# etc
 
 
 
