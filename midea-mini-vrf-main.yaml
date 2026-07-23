@@ -43,6 +43,14 @@ button:
     on_press:
       - script.execute: discover_and_assign
 
+# Single central poll cycle for all units. Do NOT add per-unit intervals in
+# the unit include file — everything goes through poll_all_assigned so the
+# shared UART bus only ever has one poll in flight at a time.
+interval:
+  - interval: 15s
+    then:
+      - script.execute: poll_all_assigned
+
 
 ##########################################################################
 # STATE STORAGE, PER SLOT.
@@ -175,7 +183,11 @@ script:
           }
           id(g_current_address_scan_index) = addr + 1;
 
-  # ── Poll every currently-assigned slot once (used after discovery). ──
+  # ── Poll every currently-assigned slot once, one after another. ──
+  # This is the ONLY thing that drives routine polling — it's called by
+  # discover_and_assign on boot/rescan, and by the periodic interval below.
+  # poll_and_publish_slot is mode: queued, so these calls are serialized
+  # rather than hitting the shared UART bus concurrently.
   - id: poll_all_assigned
     then:
       - lambda: |-

@@ -77,10 +77,3 @@ button:
       - script.execute:
           id: poll_and_publish_slot
           slot: ${unit_slot}
-
-interval:
-  - interval: 15s
-    then:
-      - script.execute:
-          id: poll_and_publish_slot
-          slot: ${unit_slot}
