@@ -1,5 +1,8 @@
+
+
+
 esp32:
-  board: esp32dev  # adjust to your variant
+  board: esp32dev
   framework:
     type: arduino
 
@@ -18,8 +21,8 @@ esphome:
 
 uart:
   id: d1d2_bus
-  tx_pin: GPIO17          # adjust to your wiring
-  rx_pin: GPIO16          # adjust to your wiring
+  tx_pin: ${uart_tx}          # adjust to your wiring
+  rx_pin: ${uart_rx}          # adjust to your wiring
   baud_rate: 4800
   data_bits: 8
   parity: NONE
@@ -28,12 +31,12 @@ uart:
 
 text_sensor:
   - platform: template
-    name: "D1D2 Bridge Version"
+    name: "midea-mini-vrf Version"
     id: version
 
 button:
   - platform: template
-    name: "D1D2 Rediscover Units"
+    name: "Rescan Midea Bus"
     on_press:
       - script.execute: discover_and_assign
 
@@ -54,9 +57,11 @@ globals:
   - id: g_poll_ok
     type: std::array<bool, 64>
     initial_value: '{false}'
-  - id: g_scan_addr
+
+  - id: g_current_address_scan_index
     type: int
     initial_value: '0'
+
 
   # slot -> real bus address, -1 = unassigned. Persisted across reboots.
   - id: g_slot_address
@@ -68,10 +73,10 @@ script:
   # ── Sweep the bus, fill any empty slots with newly-found addresses. ──
   - id: discover_and_assign
     then:
-      - lambda: 'id(g_scan_addr) = 0;'
+      - lambda: 'id(g_current_address_scan_index) = 0;'
       - while:
           condition:
-            lambda: 'return id(g_scan_addr) < 64;'
+            lambda: 'return id(g_current_address_scan_index) < 64;'
           then:
             - script.execute: probe_one_addr
             - script.wait: probe_one_addr
@@ -80,15 +85,15 @@ script:
   - id: probe_one_addr
     then:
       - lambda: |-
-          int addr = id(g_scan_addr);
+          int addr = id(g_current_address_scan_index);
 
           bool already = false;
           for (int s = 0; s < 8; s++) if (id(g_slot_address)[s] == addr) { already = true; break; }
-          if (already) { id(g_scan_addr) = addr + 1; return; }
+          if (already) { id(g_current_address_scan_index) = addr + 1; return; }
 
           int slot = -1;
           for (int s = 0; s < 8; s++) if (id(g_slot_address)[s] == -1) { slot = s; break; }
-          if (slot == -1) { id(g_scan_addr) = 64; return; }  // all slots full, end scan
+          if (slot == -1) { id(g_current_address_scan_index) = 64; return; }  // all slots full, end scan
 
           uint8_t dummy;
           while (id(d1d2_bus)->available()) id(d1d2_bus)->read_byte(&dummy);
@@ -116,7 +121,7 @@ script:
           id(d1d2_bus)->write_array(frame.data(), frame.size());
       - delay: 500ms
       - lambda: |-
-          int addr = id(g_scan_addr);
+          int addr = id(g_current_address_scan_index);
           std::vector<uint8_t> rx;
           uint8_t b;
           while (id(d1d2_bus)->available()) {
@@ -133,7 +138,7 @@ script:
               }
             }
           }
-          id(g_scan_addr) = addr + 1;
+          id(g_current_address_scan_index) = addr + 1;
 
   # ── Poll every currently-assigned slot once (used after discovery). ──
   - id: poll_all_assigned

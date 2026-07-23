@@ -1,49 +1,56 @@
+# variables:
+
+# unit_slot: the index number you are assigning to this unit, starting at 0. Not the same as the Unit ID Midea assigns.
+# unit_name: will be used as a prefix for all the sensors etc.
+
+
+
 binary_sensor:
   - platform: template
     name: "${unit_name} Present"
-    id: present_${unit_id}
+    id: present_${unit_slot}
     device_class: connectivity
     lambda: |-
-      int addr = id(g_slot_address)[${unit_id}];
+      int addr = id(g_slot_address)[${unit_slot}];
       return addr >= 0 && id(g_poll_ok)[addr];
 
 text_sensor:
   - platform: template
     name: "${unit_name} Mode"
-    id: mode_sensor_${unit_id}
+    id: mode_sensor_${unit_slot}
 
 sensor:
   - platform: template
     name: "${unit_name} Temperature"
-    id: temp_sensor_${unit_id}
+    id: temp_sensor_${unit_slot}
     unit_of_measurement: "°C"
     accuracy_decimals: 1
 
 select:
   - platform: template
     name: "${unit_name} Mode Control"
-    id: mode_select_${unit_id}
+    id: mode_select_${unit_slot}
     optimistic: false
     options: ["off", "cool", "heat", "dry", "fan_only"]
     set_action:
       - lambda: |-
-          int addr = id(g_slot_address)[${unit_id}];
+          int addr = id(g_slot_address)[${unit_slot}];
           if (addr < 0) { ESP_LOGW("d1d2", "${unit_name}: slot not assigned, ignoring mode set"); return; }
       - if:
           condition:
-            lambda: 'return id(g_slot_address)[${unit_id}] >= 0;'
+            lambda: 'return id(g_slot_address)[${unit_slot}] >= 0;'
           then:
             - script.execute:
                 id: send_mode_generic
-                unit_id: !lambda 'return id(g_slot_address)[${unit_id}];'
+                unit_slot: !lambda 'return id(g_slot_address)[${unit_slot}];'
                 requested_mode: !lambda 'return x;'
             - script.wait: send_mode_generic
-            - script.execute: poll_${unit_id}
+            - script.execute: poll_${unit_slot}
 
 number:
   - platform: template
     name: "${unit_name} Temperature Control"
-    id: temp_number_${unit_id}
+    id: temp_number_${unit_slot}
     optimistic: false
     min_value: 17
     max_value: 30
@@ -51,47 +58,47 @@ number:
     unit_of_measurement: "°C"
     set_action:
       - lambda: |-
-          int addr = id(g_slot_address)[${unit_id}];
+          int addr = id(g_slot_address)[${unit_slot}];
           if (addr < 0) { ESP_LOGW("d1d2", "${unit_name}: slot not assigned, ignoring temp set"); return; }
       - if:
           condition:
-            lambda: 'return id(g_slot_address)[${unit_id}] >= 0;'
+            lambda: 'return id(g_slot_address)[${unit_slot}] >= 0;'
           then:
             - script.execute:
                 id: send_temp_generic
-                unit_id: !lambda 'return id(g_slot_address)[${unit_id}];'
+                unit_slot: !lambda 'return id(g_slot_address)[${unit_slot}];'
                 requested_temp: !lambda 'return x;'
             - script.wait: send_temp_generic
-            - script.execute: poll_${unit_id}
+            - script.execute: poll_${unit_slot}
 
 button:
   - platform: template
     name: "${unit_name} Poll Now"
     on_press:
-      - script.execute: poll_${unit_id}
+      - script.execute: poll_${unit_slot}
 
 script:
-  - id: poll_${unit_id}
+  - id: poll_${unit_slot}
     then:
       - if:
           condition:
-            lambda: 'return id(g_slot_address)[${unit_id}] >= 0;'
+            lambda: 'return id(g_slot_address)[${unit_slot}] >= 0;'
           then:
             - script.execute:
                 id: poll_unit_generic
-                unit_id: !lambda 'return id(g_slot_address)[${unit_id}];'
+                unit_slot: !lambda 'return id(g_slot_address)[${unit_slot}];'
             - script.wait: poll_unit_generic
             - lambda: |-
-                int addr = id(g_slot_address)[${unit_id}];
-                id(mode_sensor_${unit_id}).publish_state(id(g_reported_mode)[addr]);
-                id(temp_sensor_${unit_id}).publish_state(id(g_current_temp)[addr]);
-                id(mode_select_${unit_id}).publish_state(id(g_reported_mode)[addr]);
-                id(temp_number_${unit_id}).publish_state(id(g_current_temp)[addr]);
-                id(present_${unit_id}).publish_state(id(g_poll_ok)[addr]);
+                int addr = id(g_slot_address)[${unit_slot}];
+                id(mode_sensor_${unit_slot}).publish_state(id(g_reported_mode)[addr]);
+                id(temp_sensor_${unit_slot}).publish_state(id(g_current_temp)[addr]);
+                id(mode_select_${unit_slot}).publish_state(id(g_reported_mode)[addr]);
+                id(temp_number_${unit_slot}).publish_state(id(g_current_temp)[addr]);
+                id(present_${unit_slot}).publish_state(id(g_poll_ok)[addr]);
           else:
-            - lambda: 'id(present_${unit_id}).publish_state(false);'
+            - lambda: 'id(present_${unit_slot}).publish_state(false);'
 
 interval:
   - interval: 15s
     then:
-      - script.execute: poll_${unit_id}
+      - script.execute: poll_${unit_slot}
