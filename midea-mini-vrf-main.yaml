@@ -94,7 +94,11 @@ script:
   - id: probe_one_addr
     then:
       - lambda: |-
+	  
+
           int addr = id(g_current_address_scan_index);
+
+          ESP_LOGI("d1d2", "Probing address %d", addr);
 
           bool already = false;
           for (int s = 0; s < 8; s++) if (id(g_slot_address)[s] == addr) { already = true; break; }
