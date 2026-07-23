@@ -1,5 +1,3 @@
-
-
 ##########################################################################
 # BOARD SETUP
 
@@ -47,35 +45,62 @@ button:
 
 
 ##########################################################################
-# STATE STORAGE, PER UNIT, INDEXED BY BUS ADDRESS
+# STATE STORAGE, PER SLOT.
+#
+# Everything below is indexed by SLOT (0..7) — the position an indoor unit
+# was assigned to, NOT the real Midea bus/unit ID. g_slot_unit_id is the
+# only array that knows the real bus ID; every other array/entity only
+# ever deals in slot numbers. Translation slot -> bus ID happens inside
+# the generic scripts below, right where a UART frame is built/parsed.
 
 globals:
   - id: g_current_temp
-    type: std::array<float, ${max_unit_id}>
+    type: std::array<float, 8>
     initial_value: '{0}'
   - id: g_reported_mode
-    type: std::array<std::string, ${max_unit_id}>
+    type: std::array<std::string, 8>
     initial_value: '{""}'
   - id: g_last_mode_nibble
-    type: std::array<uint8_t, ${max_unit_id}>
-    initial_value: '{0x02}'
+    type: std::array<uint8_t, 8>
+    initial_value: '{0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02}'
   - id: g_is_powered_on
-    type: std::array<bool, ${max_unit_id}>
+    type: std::array<bool, 8>
     initial_value: '{false}'
   - id: g_poll_ok
-    type: std::array<bool, ${max_unit_id}>
+    type: std::array<bool, 8>
     initial_value: '{false}'
 
   - id: g_current_address_scan_index
     type: int
     initial_value: '0'
 
-
-  # slot -> real bus address, -1 = unassigned. Persisted across reboots.
-  - id: g_slot_address
+  # slot -> real Midea bus unit ID, -1 = unassigned. Persisted across reboots.
+  - id: g_slot_unit_id
     type: std::array<int, 8>
     restore_value: true
     initial_value: '{-1,-1,-1,-1,-1,-1,-1,-1}'
+
+  # slot -> entity pointers. Each per-unit include registers its own
+  # entities into these at boot, so the generic scripts below can publish
+  # state without knowing any compile-time entity ids.
+  - id: g_temp_sensor_ptr
+    type: std::array<sensor::Sensor*, 8>
+    initial_value: '{nullptr}'
+  - id: g_mode_sensor_ptr
+    type: std::array<text_sensor::TextSensor*, 8>
+    initial_value: '{nullptr}'
+  - id: g_unit_id_sensor_ptr
+    type: std::array<text_sensor::TextSensor*, 8>
+    initial_value: '{nullptr}'
+  - id: g_mode_select_ptr
+    type: std::array<select::Select*, 8>
+    initial_value: '{nullptr}'
+  - id: g_temp_number_ptr
+    type: std::array<number::Number*, 8>
+    initial_value: '{nullptr}'
+  - id: g_present_ptr
+    type: std::array<binary_sensor::BinarySensor*, 8>
+    initial_value: '{nullptr}'
 
 script:
   # ── Sweep the bus, fill any empty slots with newly-found addresses. ──
@@ -98,11 +123,11 @@ script:
           ESP_LOGI("d1d2", "Probing address %d", addr);
 
           bool already = false;
-          for (int s = 0; s < 8; s++) if (id(g_slot_address)[s] == addr) { already = true; break; }
+          for (int s = 0; s < 8; s++) if (id(g_slot_unit_id)[s] == addr) { already = true; break; }
           if (already) { id(g_current_address_scan_index) = addr + 1; return; }
 
           int slot = -1;
-          for (int s = 0; s < 8; s++) if (id(g_slot_address)[s] == -1) { slot = s; break; }
+          for (int s = 0; s < 8; s++) if (id(g_slot_unit_id)[s] == -1) { slot = s; break; }
           if (slot == -1) { id(g_current_address_scan_index) = ${max_unit_id}; return; }  // all slots full, end scan
 
           uint8_t dummy;
@@ -141,8 +166,8 @@ script:
 
           if (rx.size() >= 18 && rx[0] == 0xAA && rx[2] == 0x64 && rx[4] == addr) {
             for (int s = 0; s < 8; s++) {
-              if (id(g_slot_address)[s] == -1) {
-                id(g_slot_address)[s] = addr;
+              if (id(g_slot_unit_id)[s] == -1) {
+                id(g_slot_unit_id)[s] = addr;
                 ESP_LOGI("d1d2", "Assigned bus address %d -> slot %d", addr, s);
                 break;
               }
@@ -155,19 +180,20 @@ script:
     then:
       - lambda: |-
           for (int s = 0; s < 8; s++) {
-            int addr = id(g_slot_address)[s];
-            if (addr >= 0) id(poll_unit_generic)->execute(addr);
+            if (id(g_slot_unit_id)[s] >= 0) id(poll_and_publish_slot)->execute(s);
           }
 
-  # ── Poll one unit by real bus address. ──
-  - id: poll_unit_generic
+  # ── Poll one unit by slot. Translates slot -> real bus ID internally. ──
+  - id: poll_unit_by_slot
     mode: queued
     parameters:
-      unit_id: int
+      slot: int
     then:
       - lambda: |-
-          if (unit_id < 0 || unit_id >= ${max_unit_id}) { ESP_LOGE("d1d2", "poll: addr %d out of range", unit_id); return; }
-          uint8_t dest = (uint8_t) unit_id;
+          if (slot < 0 || slot >= 8) { ESP_LOGE("d1d2", "poll: slot %d out of range", slot); return; }
+          int addr = id(g_slot_unit_id)[slot];
+          if (addr < 0) { ESP_LOGW("d1d2", "poll: slot %d not assigned", slot); id(g_poll_ok)[slot] = false; return; }
+          uint8_t dest = (uint8_t) addr;
           uint8_t dummy;
           while (id(d1d2_bus)->available()) id(d1d2_bus)->read_byte(&dummy);
 
@@ -197,8 +223,10 @@ script:
           id(d1d2_bus)->write_array(frame.data(), frame.size());
       - delay: 500ms
       - lambda: |-
-          if (unit_id < 0 || unit_id >= ${max_unit_id}) return;
-          uint8_t dest = (uint8_t) unit_id;
+          if (slot < 0 || slot >= 8) return;
+          int addr = id(g_slot_unit_id)[slot];
+          if (addr < 0) return;
+          uint8_t dest = (uint8_t) addr;
 
           std::vector<uint8_t> rx;
           uint8_t b;
@@ -208,8 +236,8 @@ script:
           }
 
           if (rx.size() < 18 || rx[0] != 0xAA) {
-            ESP_LOGW("d1d2", "Unit %d poll: no valid reply (%d bytes)", dest, (int) rx.size());
-            id(g_poll_ok)[dest] = false;
+            ESP_LOGW("d1d2", "Unit %d (slot %d) poll: no valid reply (%d bytes)", dest, slot, (int) rx.size());
+            id(g_poll_ok)[slot] = false;
             return;
           }
 
@@ -226,31 +254,113 @@ script:
             default:   modeStr = "unknown";  break;
           }
 
-          id(g_is_powered_on)[dest] = on;
-          if (on) id(g_last_mode_nibble)[dest] = modeNibble;
+          id(g_is_powered_on)[slot] = on;
+          if (on) id(g_last_mode_nibble)[slot] = modeNibble;
 
-          id(g_current_temp)[dest] = 24.0f + ((int) rx[10] - 0x80) / 2.0f;
-          id(g_reported_mode)[dest] = on ? modeStr : "off";
-          id(g_poll_ok)[dest] = true;
+          id(g_current_temp)[slot] = 24.0f + ((int) rx[10] - 0x80) / 2.0f;
+          id(g_reported_mode)[slot] = on ? modeStr : "off";
+          id(g_poll_ok)[slot] = true;
 
-          ESP_LOGI("d1d2", "Unit %d: pwr=%s mode=%s temp=%.1f",
-                   dest, on ? "on" : "off", modeStr.c_str(), id(g_current_temp)[dest]);
+          ESP_LOGI("d1d2", "Unit %d (slot %d): pwr=%s mode=%s temp=%.1f",
+                   dest, slot, on ? "on" : "off", modeStr.c_str(), id(g_current_temp)[slot]);
 
-  # ── Send a mode change by real bus address. ──
-  - id: send_mode_generic
+  # ── Push current global state for a slot out to its HA entities. ──
+  - id: publish_slot
     mode: queued
     parameters:
-      unit_id: int
+      slot: int
+    then:
+      - lambda: |-
+          if (slot < 0 || slot >= 8) return;
+          int addr = id(g_slot_unit_id)[slot];
+          if (id(g_mode_sensor_ptr)[slot])    id(g_mode_sensor_ptr)[slot]->publish_state(id(g_reported_mode)[slot]);
+          if (id(g_temp_sensor_ptr)[slot])    id(g_temp_sensor_ptr)[slot]->publish_state(id(g_current_temp)[slot]);
+          if (id(g_mode_select_ptr)[slot])    id(g_mode_select_ptr)[slot]->publish_state(id(g_reported_mode)[slot]);
+          if (id(g_temp_number_ptr)[slot])    id(g_temp_number_ptr)[slot]->publish_state(id(g_current_temp)[slot]);
+          if (id(g_present_ptr)[slot])        id(g_present_ptr)[slot]->publish_state(id(g_poll_ok)[slot]);
+          if (id(g_unit_id_sensor_ptr)[slot]) {
+            id(g_unit_id_sensor_ptr)[slot]->publish_state(addr >= 0 ? std::to_string(addr) : std::string("unassigned"));
+          }
+
+  # ── Poll a slot then publish its entities. This is what each unit's
+  #    "poll now" button and 15s interval actually call. ──
+  - id: poll_and_publish_slot
+    mode: queued
+    parameters:
+      slot: int
+    then:
+      - script.execute:
+          id: poll_unit_by_slot
+          slot: !lambda 'return slot;'
+      - script.wait: poll_unit_by_slot
+      - script.execute:
+          id: publish_slot
+          slot: !lambda 'return slot;'
+      - script.wait: publish_slot
+
+  # ── Set mode on a slot: checks assignment, sends, re-polls + publishes. ──
+  - id: set_mode_by_slot
+    mode: queued
+    parameters:
+      slot: int
+      requested_mode: string
+    then:
+      - if:
+          condition:
+            lambda: 'return slot >= 0 && slot < 8 && id(g_slot_unit_id)[slot] >= 0;'
+          then:
+            - script.execute:
+                id: send_mode_by_slot
+                slot: !lambda 'return slot;'
+                requested_mode: !lambda 'return requested_mode;'
+            - script.wait: send_mode_by_slot
+            - script.execute:
+                id: poll_and_publish_slot
+                slot: !lambda 'return slot;'
+            - script.wait: poll_and_publish_slot
+          else:
+            - lambda: 'ESP_LOGW("d1d2", "set_mode: slot %d not assigned, ignoring", slot);'
+
+  # ── Set temperature on a slot: checks assignment, sends, re-polls + publishes. ──
+  - id: set_temp_by_slot
+    mode: queued
+    parameters:
+      slot: int
+      requested_temp: float
+    then:
+      - if:
+          condition:
+            lambda: 'return slot >= 0 && slot < 8 && id(g_slot_unit_id)[slot] >= 0;'
+          then:
+            - script.execute:
+                id: send_temp_by_slot
+                slot: !lambda 'return slot;'
+                requested_temp: !lambda 'return requested_temp;'
+            - script.wait: send_temp_by_slot
+            - script.execute:
+                id: poll_and_publish_slot
+                slot: !lambda 'return slot;'
+            - script.wait: poll_and_publish_slot
+          else:
+            - lambda: 'ESP_LOGW("d1d2", "set_temp: slot %d not assigned, ignoring", slot);'
+
+  # ── Send a mode change by slot. Translates slot -> real bus ID internally. ──
+  - id: send_mode_by_slot
+    mode: queued
+    parameters:
+      slot: int
       requested_mode: string
     then:
       - lambda: |-
-          if (unit_id < 0 || unit_id >= ${max_unit_id}) { ESP_LOGE("d1d2", "send_mode: addr %d out of range", unit_id); return; }
-          uint8_t dest = (uint8_t) unit_id;
+          if (slot < 0 || slot >= 8) { ESP_LOGE("d1d2", "send_mode: slot %d out of range", slot); return; }
+          int addr = id(g_slot_unit_id)[slot];
+          if (addr < 0) { ESP_LOGW("d1d2", "send_mode: slot %d not assigned", slot); return; }
+          uint8_t dest = (uint8_t) addr;
           uint8_t pwrNibble, modeNibble;
 
           if (requested_mode == "off") {
             pwrNibble  = 0x00;
-            modeNibble = id(g_last_mode_nibble)[dest];
+            modeNibble = id(g_last_mode_nibble)[slot];
           } else {
             pwrNibble  = 0x40;
             if      (requested_mode == "fan_only") modeNibble = 0x01;
@@ -258,7 +368,7 @@ script:
             else if (requested_mode == "heat")      modeNibble = 0x03;
             else if (requested_mode == "dry")       modeNibble = 0x06;
             else                                    modeNibble = 0x02;
-            id(g_last_mode_nibble)[dest] = modeNibble;
+            id(g_last_mode_nibble)[slot] = modeNibble;
           }
 
           auto crc16_modbus = [](std::vector<uint8_t> data) -> uint16_t {
@@ -285,20 +395,22 @@ script:
           frame.push_back(0x55);
           frame.push_back(0xFE);
 
-          ESP_LOGI("d1d2", "Unit %d: sending mode='%s' (0x%02X)", dest, requested_mode.c_str(), combined);
+          ESP_LOGI("d1d2", "Unit %d (slot %d): sending mode='%s' (0x%02X)", dest, slot, requested_mode.c_str(), combined);
           id(d1d2_bus)->write_array(frame.data(), frame.size());
       - delay: 600ms
 
-  # ── Send a temperature setpoint by real bus address. ──
-  - id: send_temp_generic
+  # ── Send a temperature setpoint by slot. Translates slot -> real bus ID internally. ──
+  - id: send_temp_by_slot
     mode: queued
     parameters:
-      unit_id: int
+      slot: int
       requested_temp: float
     then:
       - lambda: |-
-          if (unit_id < 0 || unit_id >= ${max_unit_id}) { ESP_LOGE("d1d2", "send_temp: addr %d out of range", unit_id); return; }
-          uint8_t dest = (uint8_t) unit_id;
+          if (slot < 0 || slot >= 8) { ESP_LOGE("d1d2", "send_temp: slot %d out of range", slot); return; }
+          int addr = id(g_slot_unit_id)[slot];
+          if (addr < 0) { ESP_LOGW("d1d2", "send_temp: slot %d not assigned", slot); return; }
+          uint8_t dest = (uint8_t) addr;
           float c = requested_temp;
           if (c < 17.0f) c = 17.0f;
           if (c > 30.0f) c = 30.0f;
@@ -328,6 +440,6 @@ script:
           frame.push_back(0x55);
           frame.push_back(0xFE);
 
-          ESP_LOGI("d1d2", "Unit %d: sending temp=%.1f (0x%02X)", dest, c, tb);
+          ESP_LOGI("d1d2", "Unit %d (slot %d): sending temp=%.1f (0x%02X)", dest, slot, c, tb);
           id(d1d2_bus)->write_array(frame.data(), frame.size());
       - delay: 600ms
