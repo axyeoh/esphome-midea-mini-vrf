@@ -66,7 +66,7 @@ number:
           then:
             - script.execute:
                 id: send_temp_generic
-                unit_slot: !lambda 'return id(g_slot_address)[${unit_slot}];'
+                unit_id: !lambda 'return id(g_slot_address)[${unit_slot}];'
                 requested_temp: !lambda 'return x;'
             - script.wait: send_temp_generic
             - script.execute: poll_${unit_slot}
