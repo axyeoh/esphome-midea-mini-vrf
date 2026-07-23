@@ -8,8 +8,7 @@ esp32:
   framework:
     type: arduino
 
-logger:
-  level: DEBUG
+
 
 esphome:
   includes:
