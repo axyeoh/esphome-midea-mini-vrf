@@ -1,5 +1,7 @@
 
 
+##########################################################################
+# BOARD SETUP
 
 esp32:
   board: esp32dev
@@ -29,6 +31,10 @@ uart:
   stop_bits: 1
   flow_control_pin: GPIO18  # DE/RE on MAX485 — HIGH during TX, LOW otherwise
 
+
+##########################################################################
+# ESPHOME SHARED SENSORS
+
 text_sensor:
   - platform: template
     name: "midea-mini-vrf Version"
@@ -40,22 +46,25 @@ button:
     on_press:
       - script.execute: discover_and_assign
 
-# ── State storage, indexed by ACTUAL bus address (0-63) ──
+
+##########################################################################
+# STATE STORAGE, PER UNIT, INDEXED BY BUS ADDRESS
+
 globals:
   - id: g_current_temp
-    type: std::array<float, 64>
+    type: std::array<float, ${max_unit_id}>
     initial_value: '{0}'
   - id: g_reported_mode
-    type: std::array<std::string, 64>
+    type: std::array<std::string, ${max_unit_id}>
     initial_value: '{""}'
   - id: g_last_mode_nibble
-    type: std::array<uint8_t, 64>
+    type: std::array<uint8_t, ${max_unit_id}>
     initial_value: '{0x02}'
   - id: g_is_powered_on
-    type: std::array<bool, 64>
+    type: std::array<bool, ${max_unit_id}>
     initial_value: '{false}'
   - id: g_poll_ok
-    type: std::array<bool, 64>
+    type: std::array<bool, ${max_unit_id}>
     initial_value: '{false}'
 
   - id: g_current_address_scan_index
@@ -76,7 +85,7 @@ script:
       - lambda: 'id(g_current_address_scan_index) = 0;'
       - while:
           condition:
-            lambda: 'return id(g_current_address_scan_index) < 64;'
+            lambda: 'return id(g_current_address_scan_index) < ${max_unit_id};'
           then:
             - script.execute: probe_one_addr
             - script.wait: probe_one_addr
@@ -93,7 +102,7 @@ script:
 
           int slot = -1;
           for (int s = 0; s < 8; s++) if (id(g_slot_address)[s] == -1) { slot = s; break; }
-          if (slot == -1) { id(g_current_address_scan_index) = 64; return; }  // all slots full, end scan
+          if (slot == -1) { id(g_current_address_scan_index) = ${max_unit_id}; return; }  // all slots full, end scan
 
           uint8_t dummy;
           while (id(d1d2_bus)->available()) id(d1d2_bus)->read_byte(&dummy);
@@ -156,7 +165,7 @@ script:
       unit_id: int
     then:
       - lambda: |-
-          if (unit_id < 0 || unit_id >= 64) { ESP_LOGE("d1d2", "poll: addr %d out of range", unit_id); return; }
+          if (unit_id < 0 || unit_id >= ${max_unit_id}) { ESP_LOGE("d1d2", "poll: addr %d out of range", unit_id); return; }
           uint8_t dest = (uint8_t) unit_id;
           uint8_t dummy;
           while (id(d1d2_bus)->available()) id(d1d2_bus)->read_byte(&dummy);
@@ -187,7 +196,7 @@ script:
           id(d1d2_bus)->write_array(frame.data(), frame.size());
       - delay: 500ms
       - lambda: |-
-          if (unit_id < 0 || unit_id >= 64) return;
+          if (unit_id < 0 || unit_id >= ${max_unit_id}) return;
           uint8_t dest = (uint8_t) unit_id;
 
           std::vector<uint8_t> rx;
@@ -234,7 +243,7 @@ script:
       requested_mode: string
     then:
       - lambda: |-
-          if (unit_id < 0 || unit_id >= 64) { ESP_LOGE("d1d2", "send_mode: addr %d out of range", unit_id); return; }
+          if (unit_id < 0 || unit_id >= ${max_unit_id}) { ESP_LOGE("d1d2", "send_mode: addr %d out of range", unit_id); return; }
           uint8_t dest = (uint8_t) unit_id;
           uint8_t pwrNibble, modeNibble;
 
@@ -287,7 +296,7 @@ script:
       requested_temp: float
     then:
       - lambda: |-
-          if (unit_id < 0 || unit_id >= 64) { ESP_LOGE("d1d2", "send_temp: addr %d out of range", unit_id); return; }
+          if (unit_id < 0 || unit_id >= ${max_unit_id}) { ESP_LOGE("d1d2", "send_temp: addr %d out of range", unit_id); return; }
           uint8_t dest = (uint8_t) unit_id;
           float c = requested_temp;
           if (c < 17.0f) c = 17.0f;
