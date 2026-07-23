@@ -86,7 +86,7 @@ script:
           then:
             - script.execute:
                 id: poll_unit_generic
-                unit_slot: !lambda 'return id(g_slot_address)[${unit_slot}];'
+                unit_id: !lambda 'return id(g_slot_address)[${unit_slot}];'
             - script.wait: poll_unit_generic
             - lambda: |-
                 int addr = id(g_slot_address)[${unit_slot}];
