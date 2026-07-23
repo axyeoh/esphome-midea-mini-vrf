@@ -42,7 +42,7 @@ select:
           then:
             - script.execute:
                 id: send_mode_generic
-                unit_slot: !lambda 'return id(g_slot_address)[${unit_slot}];'
+                unit_id: !lambda 'return id(g_slot_address)[${unit_slot}];'
                 requested_mode: !lambda 'return x;'
             - script.wait: send_mode_generic
             - script.execute: poll_${unit_slot}
